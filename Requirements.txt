@@ -1,0 +1,15 @@
+# Runtime dependencies for Vulnerability Management Excel Automation
+# Install with:
+#   python -m pip install -r Requirements.txt
+
+customtkinter
+pandas
+openpyxl
+
+# tkinter is required for the GUI but is normally bundled with Python.
+# If tkinter is missing on Linux, install the OS package, for example:
+#   sudo apt install python3-tk
+
+# Optional native dialog backends used by Generate Tracking when installed.
+PySide6
+PyQt6
