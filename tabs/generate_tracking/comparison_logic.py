@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 import pandas as pd
 
-from tabs.generate_tracking.parser import TEMPLATE_COLUMNS, highest_risk, split_values
+from tabs.generate_tracking.parser import COLUMN_ALIASES, TEMPLATE_COLUMNS, highest_risk, split_values
 
 _KEY_ALIASES = {
     "Name": ("Name", "Title", "Vulnerability", "Plugin Name"),
@@ -20,13 +21,37 @@ def _normalized_column_name(value: object) -> str:
     return " ".join(str(value).strip().casefold().replace("_", " ").split())
 
 
-def _series_for_key(df: pd.DataFrame, key_name: str) -> pd.Series:
+def normalize_key_value(value: object) -> str:
+    """Normalize one comparison-key value for null-safe matching."""
+    if pd.isna(value):
+        return ""
+
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+
+    text = str(value).strip().casefold()
+    if re.fullmatch(r"\d+\.0+", text):
+        return text.split(".", 1)[0]
+
+    return text
+
+
+def find_column(df: pd.DataFrame, aliases) -> str | None:
+    """Return the first DataFrame column matching any alias, case/spacing safe."""
     normalized_columns = {_normalized_column_name(column): column for column in df.columns}
 
-    for alias in _KEY_ALIASES[key_name]:
+    for alias in aliases:
         source_column = normalized_columns.get(_normalized_column_name(alias))
         if source_column is not None:
-            return df[source_column].fillna("").astype(str).str.strip().str.casefold()
+            return source_column
+
+    return None
+
+
+def _series_for_key(df: pd.DataFrame, key_name: str) -> pd.Series:
+    source_column = find_column(df, _KEY_ALIASES[key_name])
+    if source_column is not None:
+        return df[source_column].map(normalize_key_value).astype("object")
 
     return pd.Series([""] * len(df), index=df.index, dtype="object")
 
@@ -54,6 +79,32 @@ def merge_comma(values) -> str:
     return ", ".join(merged)
 
 
+def _aliases_for_template_column(target_col: str) -> tuple[str, ...]:
+    aliases = [target_col]
+    aliases.extend(_KEY_ALIASES.get(target_col, ()))
+    aliases.extend(COLUMN_ALIASES.get(target_col, ()))
+    return tuple(dict.fromkeys(aliases))
+
+
+def _alias_series_for_output(df: pd.DataFrame, target_col: str) -> pd.Series:
+    source_column = find_column(df, _aliases_for_template_column(target_col))
+    if source_column is not None:
+        return df[source_column]
+    return pd.Series([""] * len(df), index=df.index, dtype="object")
+
+
+def build_template_sheet_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Return Raw-derived rows in universal template-column order."""
+    out = pd.DataFrame(index=df.index)
+    for col in TEMPLATE_COLUMNS:
+        out[col] = _alias_series_for_output(df, col).fillna("").astype(str).str.strip()
+    return out[TEMPLATE_COLUMNS].reset_index(drop=True)
+
+
+def _template_view(df: pd.DataFrame) -> pd.DataFrame:
+    return build_template_sheet_df(df)
+
+
 def classify_new_old(raw_df: pd.DataFrame, master_df: Optional[pd.DataFrame]) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Split raw rows into New vs Old using tab-local Name+Host+Port+CVE logic.
 
@@ -65,18 +116,24 @@ def classify_new_old(raw_df: pd.DataFrame, master_df: Optional[pd.DataFrame]) ->
         return raw_df.copy(), raw_df.iloc[0:0].copy()
 
     raw_keys = _comparison_key(raw_df)
-    master_keys = set(_comparison_key(master_df))
-    old_mask = raw_keys.isin(master_keys)
+    blank_key = "|||"
+    master_keys = {
+        key
+        for key in _comparison_key(master_df)
+        if key != blank_key
+    }
+    old_mask = raw_keys.ne(blank_key) & raw_keys.isin(master_keys)
     return raw_df.loc[~old_mask].copy(), raw_df.loc[old_mask].copy()
 
 
 def aggregate_unique(df: pd.DataFrame) -> pd.DataFrame:
-    """Group by Name/CVE/Host and merge other fields with comma de-dup logic."""
+    """Group raw findings by Name/CVE/Host and merge all template fields."""
     if df.empty:
         return pd.DataFrame(columns=TEMPLATE_COLUMNS)
 
+    template_df = _template_view(df)
     grouped_rows = []
-    for _, group in df.groupby(["Name", "CVE", "Host / Image"], dropna=False, sort=False):
+    for _, group in template_df.groupby(["Name", "CVE", "Host / Image"], dropna=False, sort=False):
         row = {}
         for col in TEMPLATE_COLUMNS:
             if col == "Risk":
