@@ -138,6 +138,51 @@ class GenerateTrackingTab(ctk.CTkFrame):
                 apply_severity_filter=False,
             ).df
 
+    def _is_3uk_qualys_workflow(self) -> bool:
+        return (
+            self.state["selected_project"].strip().casefold() == "3uk"
+            and self.state["selected_scanner"].strip().casefold() == "qualys"
+        )
+
+    def _selected_input_paths(self) -> dict[str, str]:
+        """Capture the explicitly selected files and sheets for this run only."""
+        return {
+            "master_file": self.master_file.get().strip(),
+            "master_sheet": self.master_sheet.get().strip(),
+            "raw_file": self.raw_file.get().strip(),
+            "raw_sheet": self.raw_sheet.get().strip(),
+            "output_file": self.output_file.get().strip(),
+        }
+
+    def _load_selected_raw_sheet(self, selected: dict[str, str]):
+        """Load only the Raw file sheet selected in the Raw Sheet dropdown."""
+        if self._is_3uk_qualys_workflow():
+            return build_3uk_qualys_total_sheet_df(
+                selected["raw_file"],
+                selected["raw_sheet"],
+            )
+
+        return self._parse_with_optional_severity_fallback(
+            selected["raw_file"],
+            selected["raw_sheet"],
+            "Raw file",
+        )
+
+    def _load_selected_master_sheet(self, selected: dict[str, str]):
+        """Load only the Master file sheet selected in the Master Sheet dropdown."""
+        if self._is_3uk_qualys_workflow():
+            return build_3uk_qualys_total_sheet_df(
+                selected["master_file"],
+                selected["master_sheet"],
+            )
+
+        return self._parse_with_optional_severity_fallback(
+            selected["master_file"],
+            selected["master_sheet"],
+            "Master file",
+        )
+
+
 
     def run(self):
 
@@ -151,51 +196,21 @@ class GenerateTrackingTab(ctk.CTkFrame):
             )
 
             self._validate_inputs()
+            selected = self._selected_input_paths()
 
             # -------------------------------------------------
-            # PARSE RAW FILE
+            # PARSE SELECTED RAW AND MASTER SHEETS ONLY
             # -------------------------------------------------
 
             hooks.get("set_stage", lambda *_: None)("Parse", 2)
+            self.logger.info(
+                "Generate Tracking comparison scope: raw sheet %r vs master sheet %r",
+                selected["raw_sheet"],
+                selected["master_sheet"],
+            )
 
-            if (
-                self.state["selected_project"].strip().casefold() == "3uk"
-                and self.state["selected_scanner"].strip().casefold() == "qualys"
-            ):
-                raw_df = build_3uk_qualys_total_sheet_df(
-                    self.raw_file.get(),
-                    self.raw_sheet.get(),
-                )
-
-            else:
-
-                raw_df = self._parse_with_optional_severity_fallback(
-                    self.raw_file.get(),
-                    self.raw_sheet.get(),
-                    "Raw file",
-                )
-
-            # -------------------------------------------------
-            # PARSE MASTER FILE
-            # -------------------------------------------------
-
-            if (
-                self.state["selected_project"].strip().casefold() == "3uk"
-                and self.state["selected_scanner"].strip().casefold() == "qualys"
-            ):
-
-                master_df = build_3uk_qualys_total_sheet_df(
-                    self.master_file.get(),
-                    self.master_sheet.get(),
-                )
-
-            else:
-
-                master_df = self._parse_with_optional_severity_fallback(
-                    self.master_file.get(),
-                    self.master_sheet.get(),
-                    "Master file",
-                )
+            raw_df = self._load_selected_raw_sheet(selected)
+            master_df = self._load_selected_master_sheet(selected)
             # -------------------------------------------------
             # CLASSIFICATION
             # -------------------------------------------------
@@ -205,12 +220,9 @@ class GenerateTrackingTab(ctk.CTkFrame):
                 raw_df,
                 master_df,
             )
-            if (
-                self.state["selected_project"].strip().casefold() == "3uk"
-                and self.state["selected_scanner"].strip().casefold() == "qualys"
-            ):
+            if self._is_3uk_qualys_workflow():
 
-                total_df = build_3uk_qualys_template_sheet_df(raw_df)
+                total_df = raw_df
                 new_df = build_3uk_qualys_template_sheet_df(new_df)
                 old_df = build_3uk_qualys_template_sheet_df(old_df)
                 unique_df = build_3uk_qualys_unique_sheet_df(raw_df)
@@ -232,7 +244,7 @@ class GenerateTrackingTab(ctk.CTkFrame):
             hooks.get("set_stage", lambda *_: None)("Write", 5)
 
             output = write_output(
-                self.output_file.get(),
+                selected["output_file"],
                 new_df,
                 old_df,
                 unique_df,
