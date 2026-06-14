@@ -14,6 +14,10 @@ from tabs.generate_tracking.excel_writer.sheets import (
     write_main_sheet,
     write_summary_sheet,
 )
+from tabs.generate_tracking.excel_writer.three_uk_qualys import (
+    THREE_UK_QUALYS_TOTAL_COLUMNS,
+    is_three_uk_qualys_project,
+)
 
 TOTAL_VULNERABILITIES_SHEET_NAME = "Total Vulnerabilities"
 NEW_VULNERABILITIES_SHEET_NAME = "New Vulnerabilities"
@@ -21,6 +25,7 @@ OLD_VULNERABILITIES_SHEET_NAME = "Old Vulnerabilities"
 UNIQUE_VULNERABILITIES_SHEET_NAME = "Unique Vulnerabilities"
 DASHBOARD_SHEET_NAME = "Dashboard"
 DISPOSITION_SHEET_NAME = "Disposition"
+COMPARISON_DEBUG_SHEET_NAME = "Comparison Debug"
 
 _TOTAL_VULNERABILITY_ALIASES = {
     "total vulnerabilities",
@@ -165,8 +170,23 @@ def _write_dataframe_sheet(
 
 
 def _write_tracking_sheet(ws, df: pd.DataFrame, project: str, scanner: str, *, sheet_kind: str):
-    """Write Total/New/Old/Unique Generate Tracking sheets in template layout."""
-    write_main_sheet(ws, _coerce_dataframe(df), project, scanner=scanner)
+    """Write Generate Tracking vulnerability sheets in the required layout."""
+    df = _coerce_dataframe(df)
+    if (
+        sheet_kind == "total"
+        and is_three_uk_qualys_project(project, scanner)
+        and set(THREE_UK_QUALYS_TOTAL_COLUMNS).issubset(df.columns)
+    ):
+        _write_dataframe_sheet(
+            ws,
+            df.reindex(columns=THREE_UK_QUALYS_TOTAL_COLUMNS),
+            project,
+            scanner,
+            blue_headers=QUALYS_BLUE_HEADERS,
+        )
+        return
+
+    write_main_sheet(ws, df, project, scanner=scanner)
 
 
 def write_output(
@@ -180,6 +200,7 @@ def write_output(
     new_sheet_name: str = TOTAL_VULNERABILITIES_SHEET_NAME,
     include_dashboard_sheet: bool = True,
     total_df: pd.DataFrame | None = None,
+    comparison_debug_df: pd.DataFrame | None = None,
 ):
     """Create the Generate Tracking workbook with dashboard, data, and reference sheets."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -225,6 +246,10 @@ def write_output(
 
     ws_disposition = wb.create_sheet(DISPOSITION_SHEET_NAME)
     write_disposition_sheet(ws_disposition, project, scanner)
+
+    if comparison_debug_df is not None:
+        ws_debug = wb.create_sheet(COMPARISON_DEBUG_SHEET_NAME)
+        _write_dataframe_sheet(ws_debug, comparison_debug_df, project, scanner)
 
     wb.save(path)
     return path

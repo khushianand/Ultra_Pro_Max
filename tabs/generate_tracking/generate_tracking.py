@@ -2,7 +2,16 @@
 
 import customtkinter as ctk
 
-from tabs.generate_tracking.logic import aggregate_unique, classify_new_old
+from tabs.generate_tracking.logic import (
+    aggregate_unique,
+    build_comparison_debug_df,
+    build_template_sheet_df,
+    classify_new_old,
+    comparison_non_empty_counts,
+    comparison_values_preview,
+    resolve_comparison_columns,
+)
+from tabs.generate_tracking.comparison_logic import _comparison_key
 from tabs.generate_tracking.excel_writer import write_output
 from tabs.generate_tracking.excel_writer.formatting import apply_table_formatting
 from tabs.generate_tracking.parser import parse_scan_file
@@ -10,6 +19,7 @@ from tabs.generate_tracking.excel_writer import (
     build_3uk_qualys_template_sheet_df,
     build_3uk_qualys_total_sheet_df,
     build_3uk_qualys_unique_sheet_df,
+    read_sheet_as_df,
 )
 from utils.file_handler import list_excel_sheets, validate_file
 from gui.qt_dialogs import DialogService
@@ -119,24 +129,113 @@ class GenerateTrackingTab(ctk.CTkFrame):
         if not self.output_file.get():
             raise ValueError("Please select output file")
 
-    def _parse_with_optional_severity_fallback(self, path: str, sheet: str, label: str):
-        try:
-            return parse_scan_file(path, sheet, self.state["selected_scanner"], self.state["selected_project"]).df
-        except ValueError as exc:
-            if "No rows left after severity filtering" not in str(exc):
-                raise
-            self.logger.warning(
-                "%s has no rows after severity filtering; retrying without severity filter",
-                label,
+    def _parse_selected_standard_sheet(self, path: str, sheet: str):
+        """Parse one selected standard scanner sheet without dropping Raw rows."""
+        return parse_scan_file(
+            path,
+            sheet,
+            self.state["selected_scanner"],
+            self.state["selected_project"],
+            require_rows_after_filter=False,
+            apply_severity_filter=False,
+        ).df
+
+    def _is_3uk_qualys_workflow(self) -> bool:
+        return (
+            self.state["selected_project"].strip().casefold() == "3uk"
+            and self.state["selected_scanner"].strip().casefold() == "qualys"
+        )
+
+    def _normalized_sheet_name(self, sheet_name: str) -> str:
+        return " ".join(str(sheet_name).strip().casefold().replace("_", " ").split())
+
+    def _is_tracker_vulnerability_sheet(self, sheet_name: str) -> bool:
+        return self._normalized_sheet_name(sheet_name) in {
+            "total vulnerabilities",
+            "new vulnerabilities",
+            "old vulnerabilities",
+            "unique vulnerabilities",
+            "total data",
+            "unique data",
+        }
+
+    def _is_qualys_total_master_sheet(self, sheet_name: str) -> bool:
+        return self._normalized_sheet_name(sheet_name) in {
+            "total vulnerabilities",
+            "total vulnerability",
+            "total vulnerability sheet",
+            "total data",
+        }
+
+    def _selected_input_paths(self) -> dict[str, str]:
+        """Capture the explicitly selected files and sheets for this run only."""
+        return {
+            "master_file": self.master_file.get().strip(),
+            "master_sheet": self.master_sheet.get().strip(),
+            "raw_file": self.raw_file.get().strip(),
+            "raw_sheet": self.raw_sheet.get().strip(),
+            "output_file": self.output_file.get().strip(),
+        }
+
+    def _load_selected_raw_sheet(self, selected: dict[str, str]):
+        """Load only the Raw file sheet selected in the Raw Sheet dropdown."""
+        if self._is_3uk_qualys_workflow():
+            return build_3uk_qualys_total_sheet_df(
+                selected["raw_file"],
+                selected["raw_sheet"],
             )
-            return parse_scan_file(
-                path,
-                sheet,
-                self.state["selected_scanner"],
-                self.state["selected_project"],
-                require_rows_after_filter=False,
-                apply_severity_filter=False,
-            ).df
+
+        return self._parse_selected_standard_sheet(
+            selected["raw_file"],
+            selected["raw_sheet"],
+        )
+
+    def _load_selected_master_sheet(self, selected: dict[str, str]):
+        """Load only the Master file sheet selected in the Master Sheet dropdown."""
+        master_sheet = selected["master_sheet"]
+
+        if self._is_3uk_qualys_workflow() and self._is_qualys_total_master_sheet(master_sheet):
+            return build_3uk_qualys_total_sheet_df(
+                selected["master_file"],
+                master_sheet,
+            )
+
+        if self._is_tracker_vulnerability_sheet(master_sheet):
+            return read_sheet_as_df(
+                selected["master_file"],
+                master_sheet,
+            )
+
+        return self._parse_selected_standard_sheet(
+            selected["master_file"],
+            master_sheet,
+        )
+
+
+    def _print_comparison_column_health(self, label: str, df, columns, counts):
+        row_count = len(df)
+        for field_name, column in columns.items():
+            if column is None:
+                print(f"{label} COMPARISON COLUMN WARNING: {field_name} did not resolve to a column")
+                continue
+
+            non_empty_count = counts[field_name]
+            if non_empty_count == 0:
+                print(f"{label} COMPARISON COLUMN WARNING: {field_name} column {column!r} is entirely blank")
+            elif row_count and non_empty_count / row_count < 0.2:
+                print(
+                    f"{label} COMPARISON COLUMN WARNING: {field_name} column {column!r} is mostly blank "
+                    f"({non_empty_count}/{row_count} non-empty)"
+                )
+
+    def _resolved_comparison_sample(self, df, columns):
+        resolved = [
+            columns[field_name]
+            for field_name in ("Name", "Host / Image", "Port", "CVE")
+            if columns[field_name] is not None
+        ]
+        return df[resolved].head(20) if resolved else df.iloc[0:0]
+
 
 
     def run(self):
@@ -151,73 +250,110 @@ class GenerateTrackingTab(ctk.CTkFrame):
             )
 
             self._validate_inputs()
+            selected = self._selected_input_paths()
 
             # -------------------------------------------------
-            # PARSE RAW FILE
+            # PARSE SELECTED RAW AND MASTER SHEETS ONLY
             # -------------------------------------------------
 
             hooks.get("set_stage", lambda *_: None)("Parse", 2)
+            self.logger.info(
+                "Generate Tracking comparison scope: raw sheet %r vs master sheet %r",
+                selected["raw_sheet"],
+                selected["master_sheet"],
+            )
 
-            if (
-                self.state["selected_project"].strip().casefold() == "3uk"
-                and self.state["selected_scanner"].strip().casefold() == "qualys"
-            ):
-                raw_df = build_3uk_qualys_total_sheet_df(
-                    self.raw_file.get(),
-                    self.raw_sheet.get(),
-                )
-
-            else:
-
-                raw_df = self._parse_with_optional_severity_fallback(
-                    self.raw_file.get(),
-                    self.raw_sheet.get(),
-                    "Raw file",
-                )
-
-            # -------------------------------------------------
-            # PARSE MASTER FILE
-            # -------------------------------------------------
-
-            if (
-                self.state["selected_project"].strip().casefold() == "3uk"
-                and self.state["selected_scanner"].strip().casefold() == "qualys"
-            ):
-
-                master_df = build_3uk_qualys_total_sheet_df(
-                    self.master_file.get(),
-                    self.master_sheet.get(),
-                )
-
-            else:
-
-                master_df = self._parse_with_optional_severity_fallback(
-                    self.master_file.get(),
-                    self.master_sheet.get(),
-                    "Master file",
-                )
+            raw_df = self._load_selected_raw_sheet(selected)
+            master_df = self._load_selected_master_sheet(selected)
             # -------------------------------------------------
             # CLASSIFICATION
             # -------------------------------------------------
             hooks.get("set_stage", lambda *_: None)("Compare", 3)
 
+            raw_comparison_columns = resolve_comparison_columns(raw_df)
+            master_comparison_columns = resolve_comparison_columns(master_df)
+            raw_counts = comparison_non_empty_counts(raw_df, raw_comparison_columns)
+            master_counts = comparison_non_empty_counts(master_df, master_comparison_columns)
+
+            print("RAW COLUMNS")
+            print(raw_df.columns.tolist())
+
+            print("MASTER COLUMNS")
+            print(master_df.columns.tolist())
+
+            print("RAW COMPARISON COLUMNS")
+            print(
+                raw_comparison_columns["Name"],
+                raw_comparison_columns["Host / Image"],
+                raw_comparison_columns["Port"],
+                raw_comparison_columns["CVE"],
+            )
+
+            print("MASTER COMPARISON COLUMNS")
+            print(
+                master_comparison_columns["Name"],
+                master_comparison_columns["Host / Image"],
+                master_comparison_columns["Port"],
+                master_comparison_columns["CVE"],
+            )
+
+            print("RAW COMPARISON NON-EMPTY COUNTS")
+            print(raw_counts["Name"])
+            print(raw_counts["Host / Image"])
+            print(raw_counts["Port"])
+            print(raw_counts["CVE"])
+
+            print("MASTER COMPARISON NON-EMPTY COUNTS")
+            print(master_counts["Name"])
+            print(master_counts["Host / Image"])
+            print(master_counts["Port"])
+            print(master_counts["CVE"])
+
+            self._print_comparison_column_health("RAW", raw_df, raw_comparison_columns, raw_counts)
+            self._print_comparison_column_health("MASTER", master_df, master_comparison_columns, master_counts)
+
+            print("RAW RESOLVED COMPARISON SAMPLE")
+            print(self._resolved_comparison_sample(raw_df, raw_comparison_columns))
+
+            print("MASTER RESOLVED COMPARISON SAMPLE")
+            print(self._resolved_comparison_sample(master_df, master_comparison_columns))
+
+            print("RAW SAMPLE")
+            print(raw_df.head())
+
+            print("MASTER SAMPLE")
+            print(master_df.head())
+
+            print("RAW COMPARISON VALUES")
+            print(comparison_values_preview(raw_df))
+
+            print("MASTER COMPARISON VALUES")
+            print(comparison_values_preview(master_df))
+
+            print("RAW KEYS")
+            print(_comparison_key(raw_df).head(20).tolist())
+
+            print("MASTER KEYS")
+            print(_comparison_key(master_df).head(20).tolist())
+
+            comparison_debug_df = build_comparison_debug_df(raw_df, master_df)
+
             new_df, old_df = classify_new_old(
                 raw_df,
                 master_df,
             )
-            if (
-                self.state["selected_project"].strip().casefold() == "3uk"
-                and self.state["selected_scanner"].strip().casefold() == "qualys"
-            ):
+            if self._is_3uk_qualys_workflow():
 
-                total_df = build_3uk_qualys_template_sheet_df(raw_df)
+                total_df = raw_df
                 new_df = build_3uk_qualys_template_sheet_df(new_df)
                 old_df = build_3uk_qualys_template_sheet_df(old_df)
                 unique_df = build_3uk_qualys_unique_sheet_df(raw_df)
 
             else:
 
-                total_df = raw_df
+                total_df = build_template_sheet_df(raw_df)
+                new_df = build_template_sheet_df(new_df)
+                old_df = build_template_sheet_df(old_df)
                 unique_df = aggregate_unique(raw_df)
 
             hooks.get("update_metrics", lambda **_: None)(
@@ -232,13 +368,14 @@ class GenerateTrackingTab(ctk.CTkFrame):
             hooks.get("set_stage", lambda *_: None)("Write", 5)
 
             output = write_output(
-                self.output_file.get(),
+                selected["output_file"],
                 new_df,
                 old_df,
                 unique_df,
                 self.state["selected_project"],
                 self.state["selected_scanner"],
                 total_df=total_df,
+                comparison_debug_df=comparison_debug_df,
             )
 
             # -------------------------------------------------
