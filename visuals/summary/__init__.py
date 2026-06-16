@@ -4,6 +4,7 @@ __all__ = [
     "disposition_summary",
     "expert_severity_summary",
     "severity_chart_summary",
+    "write_summary_sheet",
 ]
 
 

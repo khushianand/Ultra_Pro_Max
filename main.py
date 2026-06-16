@@ -68,9 +68,20 @@ class App(ctk.CTk):
         """Opens Scanner Selection screen."""
         self._swap(Window3ScannerSelection(self.container, self.state_data, self.show_window2, self.show_window4))
 
+    def start_again(self):
+        """Reset workflow selections and return to the first window."""
+        self.state_data["entry_mode"] = "VNF"
+        self.state_data["selected_project"] = "Select Project"
+        self.state_data["selected_scanner"] = "Select Scanner"
+        self.state_data["last_output_file"] = ""
+        metrics = self.state_data.get("live_metrics")
+        if metrics:
+            metrics.reset()
+        self.show_window1()
+
     def show_window4(self):
         """Opens Main Dashboard containing workflow tabs"""
-        frame = Window4Main(self.container, self.state_data, self.logger)
+        frame = Window4Main(self.container, self.state_data, self.logger, self.start_again)
         self._swap(frame)
         frame.attach_log_handler()
 

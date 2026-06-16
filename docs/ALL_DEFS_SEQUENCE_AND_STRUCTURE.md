@@ -397,7 +397,7 @@ Common definitions in each tab package:
 - `_split_summary_values`
 - `disposition_summary`
 
-### `visuals/summary/summary_update_logic.py`
+### `visuals/summary/summary_generator.py`
 
 - Exposes summary/dashboard refresh writer from the Add VAMS Data local Excel writer.
 

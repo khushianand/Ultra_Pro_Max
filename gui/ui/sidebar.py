@@ -4,7 +4,7 @@ import customtkinter as ctk
 
 class Sidebar(ctk.CTkFrame):
     ITEMS = [
-        ("⌂", "Dashboard"),
+        ("↻", "Start Again"),
         ("▣", "Make Report"),
         ("▧", "Generate Tracking"),
         ("◉", "Add VAMS Data"),
