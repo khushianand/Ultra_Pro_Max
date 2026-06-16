@@ -83,3 +83,14 @@ def disposition_summary(df: pd.DataFrame, disposition_order: List[str]) -> pd.Da
             display = normalized_order.get(token.lower(), token)
             counts[display] = counts.get(display, 0) + 1
     return pd.DataFrame({"Disposition": key, SUMMARY_VALUE_COLUMN: int(value)} for key, value in counts.items())
+
+
+def write_summary_sheet(*args, **kwargs):
+    """Lazy proxy for the Add VAMS dashboard summary writer.
+
+    Kept here so summary generation/update helpers live in one module without
+    introducing an import-time cycle with tab sheet writers.
+    """
+    from tabs.add_vams_data.excel_writer import write_summary_sheet as _write_summary_sheet
+
+    return _write_summary_sheet(*args, **kwargs)

@@ -398,7 +398,7 @@ Creates data summaries for dashboard charts:
 - expert severity summary,
 - disposition summary.
 
-### `summary_update_logic.py`
+### `summary_generator.py`
 
 Provides a small compatibility entry point to refresh summary/dashboard sheets through the Add VAMS Data tab-local writer.
 

@@ -373,7 +373,7 @@ Special 3UK + Qualys support:
 - reported vs expert severity,
 - disposition counts.
 
-`visuals/summary/summary_update_logic.py` exposes the Add VAMS Data tab-local dashboard writer for summary refreshes.
+`visuals/summary/summary_generator.py` exposes the Add VAMS Data tab-local dashboard writer for summary refreshes.
 
 ---
 

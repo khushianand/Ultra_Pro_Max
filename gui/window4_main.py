@@ -38,10 +38,11 @@ class Window4Main(ctk.CTkFrame):
         "Write/Format": "Write",
     }
 
-    def __init__(self, master, state, logger):
+    def __init__(self, master, state, logger, on_start_again=None):
         super().__init__(master)
         self.state = state
         self.logger = logger
+        self.on_start_again = on_start_again
         self.theme_name = self.state.get("theme_name", "Dark")
         self._stage_progress = 0
         self._timer_job = None
@@ -174,7 +175,7 @@ class Window4Main(ctk.CTkFrame):
 
     def _on_nav(self, name: str):
         mapping = {
-            "Dashboard": 0,
+            "Start Again": -3,
             "Make Report": 0,
             "Generate Tracking": 1,
             "Add VAMS Data": 2,
@@ -193,6 +194,11 @@ class Window4Main(ctk.CTkFrame):
         if idx == -1:
             self.logs.text.focus_set()
             self.logger.info("Logs panel focused from sidebar")
+            return
+        if idx == -3:
+            self.logger.info("Start Again selected from sidebar")
+            if self.on_start_again is not None:
+                self.after_idle(self.on_start_again)
             return
         self._open_settings_modal()
 
